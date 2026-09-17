@@ -21,6 +21,9 @@ import time
 
 import requests
 
+import numpy as np
+from pyproj import Transformer
+
 
 # ============================================================
 # PATHS
@@ -61,10 +64,63 @@ OUT_FILE = (
 # Slightly padded around operational Hero Dirt grid.
 # ============================================================
 
-SOUTH = 34.14
-WEST = -118.24
-NORTH = 34.31
-EAST = -118.06
+STATIC_FILE = (
+    ROOT
+    / "static"
+    / "model"
+    / "HeroDirt_static_200m.npz"
+)
+
+D = np.load(
+    STATIC_FILE
+)
+
+grid_x = D["x"]
+grid_y = D["y"]
+
+to_ll = Transformer.from_crs(
+    "EPSG:26911",
+    "EPSG:4326",
+    always_xy=True,
+)
+
+xmin = float(np.nanmin(grid_x))
+xmax = float(np.nanmax(grid_x))
+ymin = float(np.nanmin(grid_y))
+ymax = float(np.nanmax(grid_y))
+
+corners = [
+    to_ll.transform(xmin, ymin),
+    to_ll.transform(xmin, ymax),
+    to_ll.transform(xmax, ymin),
+    to_ll.transform(xmax, ymax),
+]
+
+lons = [
+    c[0]
+    for c in corners
+]
+
+lats = [
+    c[1]
+    for c in corners
+]
+
+# Small geographic padding outside the model domain.
+PAD = 0.01
+
+WEST = min(lons) - PAD
+EAST = max(lons) + PAD
+SOUTH = min(lats) - PAD
+NORTH = max(lats) + PAD
+
+print()
+print("OSM download domain from operational model grid:")
+print(f"  south: {SOUTH:.5f}")
+print(f"  west:  {WEST:.5f}")
+print(f"  north: {NORTH:.5f}")
+print(f"  east:  {EAST:.5f}")
+print()
 
 
 # ============================================================
@@ -74,8 +130,8 @@ EAST = -118.06
 # OSM regions around Fairfield / New Haven / Hartford.
 # ============================================================
 
-N_LON = 4
-N_LAT = 3
+N_LON = 8
+N_LAT = 6
 
 
 lon_edges = [

@@ -202,24 +202,82 @@ utm_to_ll = Transformer.from_crs(
 
 # ============================================================
 # DOMAIN
+#
+# Derive bounds directly from the operational v2 model grid.
+# This guarantees the map uses the same spatial footprint as
+# the soil-moisture model rather than an older DEM raster.
 # ============================================================
 
-with rasterio.open(
-    GRID_TIF
-) as src:
+dx = float(
+    np.nanmedian(
+        np.abs(
+            np.diff(x)
+        )
+    )
+)
 
-    b = src.bounds
+dy = float(
+    np.nanmedian(
+        np.abs(
+            np.diff(y)
+        )
+    )
+)
+
+
+xmin = float(
+    np.nanmin(x)
+    -
+    0.5 * dx
+)
+
+xmax = float(
+    np.nanmax(x)
+    +
+    0.5 * dx
+)
+
+ymin = float(
+    np.nanmin(y)
+    -
+    0.5 * dy
+)
+
+ymax = float(
+    np.nanmax(y)
+    +
+    0.5 * dy
+)
 
 
 west_lon, south_lat = utm_to_ll.transform(
-    b.left,
-    b.bottom,
+    xmin,
+    ymin,
 )
 
 east_lon, north_lat = utm_to_ll.transform(
-    b.right,
-    b.top,
+    xmax,
+    ymax,
 )
+
+
+print(
+    "Operational model domain:"
+)
+
+print(
+    f"  grid: {len(y)} x {len(x)}"
+)
+
+print(
+    f"  lon:  {west_lon:.4f} to {east_lon:.4f}"
+)
+
+print(
+    f"  lat:  {south_lat:.4f} to {north_lat:.4f}"
+)
+
+print()
 
 
 # ============================================================
@@ -242,21 +300,27 @@ with open(
         f
     )
 
-if not AREA_CACHE.exists():
+if AREA_CACHE.exists():
 
-    raise RuntimeError(
-        f"Missing area cache:\n{AREA_CACHE}"
+    with open(
+        AREA_CACHE,
+        "r",
+    ) as f:
+
+        osm_areas = json.load(
+            f
+        )
+
+else:
+
+    print(
+        "Area cache not found; "
+        "continuing without area search."
     )
 
-
-with open(
-    AREA_CACHE,
-    "r",
-) as f:
-
-    osm_areas = json.load(
-        f
-    )
+    osm_areas = {
+        "elements": []
+    }
 # ============================================================
 # GRID LOOKUP
 # ============================================================
@@ -415,11 +479,31 @@ def densify_way(
     return dense
 def is_trail_like(tags):
 
-    highway = tags.get("highway", "").strip().lower()
-    footway = tags.get("footway", "").strip().lower()
-    surface = tags.get("surface", "").strip().lower()
-    bicycle = tags.get("bicycle", "").strip().lower()
-    access = tags.get("access", "").strip().lower()
+    highway = tags.get(
+        "highway",
+        "",
+    ).strip().lower()
+
+    footway = tags.get(
+        "footway",
+        "",
+    ).strip().lower()
+
+    surface = tags.get(
+        "surface",
+        "",
+    ).strip().lower()
+
+    bicycle = tags.get(
+        "bicycle",
+        "",
+    ).strip().lower()
+
+    access = tags.get(
+        "access",
+        "",
+    ).strip().lower()
+
 
     if access in {
         "no",
@@ -428,12 +512,14 @@ def is_trail_like(tags):
     }:
         return False
 
+
     if footway in {
         "sidewalk",
         "crossing",
         "access_aisle",
     }:
         return False
+
 
     if surface in {
         "asphalt",
@@ -444,11 +530,105 @@ def is_trail_like(tags):
     }:
         return False
 
+
     if highway == "path":
         return True
 
+
     if highway == "track":
-        return True
+
+        name = tags.get(
+            "name",
+            "",
+        ).strip()
+
+        ref = tags.get(
+            "ref",
+            "",
+        ).strip().lower()
+
+        tracktype = tags.get(
+            "tracktype",
+            "",
+        ).strip().lower()
+
+        atv = tags.get(
+            "atv",
+            "",
+        ).strip().lower()
+
+        mtb_scale = tags.get(
+            "mtb:scale",
+            "",
+        ).strip()
+
+        tiger_cfcc = tags.get(
+            "tiger:cfcc",
+            "",
+        ).strip()
+
+
+        if bicycle in {
+            "yes",
+            "designated",
+            "permissive",
+        }:
+            return True
+
+
+        if mtb_scale:
+            return True
+
+
+        if ref.startswith(
+            (
+                "fr ",
+                "fs ",
+                "nfs ",
+            )
+        ):
+            return True
+
+
+        if tracktype:
+            return True
+
+
+        if surface in {
+            "dirt",
+            "earth",
+            "ground",
+            "unpaved",
+            "gravel",
+            "fine_gravel",
+            "compacted",
+            "sand",
+            "rock",
+        }:
+            return True
+
+
+        if atv in {
+            "yes",
+            "designated",
+            "permissive",
+        }:
+            return True
+
+
+        # Legacy TIGER road imports often appear as
+        # highway=track but are not useful recreational trails.
+        if tiger_cfcc:
+            return False
+
+
+        # Keep named non-TIGER tracks as a reasonable fallback.
+        if name:
+            return True
+
+
+        return False
+
 
     if highway == "footway":
 
@@ -467,6 +647,7 @@ def is_trail_like(tags):
         }:
             return True
 
+
         if bicycle in {
             "yes",
             "designated",
@@ -474,7 +655,9 @@ def is_trail_like(tags):
         }:
             return True
 
+
         return False
+
 
     if highway == "cycleway":
 
@@ -489,9 +672,12 @@ def is_trail_like(tags):
         }:
             return True
 
+
         return False
 
+
     return False
+
 
 # ============================================================
 # PREPROCESS TRAILS

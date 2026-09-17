@@ -810,6 +810,7 @@ def score_state(
     tread,
     shallow,
     deep,
+    valid_mask=public,
 ):
 
     subsurface = (
@@ -841,7 +842,7 @@ def score_state(
 
         plasticity_index=PI,
 
-        public_valid=public,
+        public_valid=valid_mask,
     )
 
 
@@ -2347,6 +2348,24 @@ if final_gap_hours > 0:
 )
 
 
+# Full physics-domain score for the science Explorer.
+# Operational rider-facing products continue to use
+# current_score, which remains masked by public_valid.
+
+(
+    current_score_physics,
+    _,
+    _,
+    _,
+) = score_state(
+
+    tread,
+    shallow,
+    deep,
+    valid_mask=physics,
+)
+
+
 current_theta05 = (
     ZTREAD
     *
@@ -2411,6 +2430,10 @@ np.savez_compressed(
     ),
 
     score=current_score.astype(
+        np.float32
+    ),
+
+    score_physics=current_score_physics.astype(
         np.float32
     ),
 
