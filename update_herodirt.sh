@@ -37,6 +37,8 @@ echo "[7/7] Publishing GitHub Pages site + source code..."
 
 cp web/HeroDirt_trails.html web/index.html
 
+touch web/.nojekyll
+
 mkdir -p web/src
 
 cp src/get_mrms.py web/src/
@@ -54,6 +56,7 @@ cp update_herodirt.sh web/update_herodirt.sh
 cd web
 
 git add index.html
+git add .nojekyll
 git add data/*.geojson
 git add src/*.py
 git add update_herodirt.sh
