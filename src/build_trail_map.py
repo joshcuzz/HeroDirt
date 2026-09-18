@@ -2672,7 +2672,13 @@ geojson_loader_js = r"""
             url
         ) {
 
-            fetch(url)
+            fetch(
+                url
+                +
+                "?v="
+                +
+                Date.now()
+            )
 
             .then(function(response) {
 
