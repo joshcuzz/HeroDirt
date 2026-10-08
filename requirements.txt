@@ -1,0 +1,10 @@
+numpy
+requests
+beautifulsoup4
+h5py
+earthaccess
+pyproj
+rasterio
+xarray
+matplotlib
+folium

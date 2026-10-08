@@ -1,0 +1,168 @@
+
+name: Hero Dirt San Gabriels Forecast
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: herodirt-pages
+  cancel-in-progress: false
+
+jobs:
+  forecast:
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          path: HeroDirt/web
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+          cache-dependency-path: HeroDirt/web/requirements.txt
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r "$GITHUB_WORKSPACE/HeroDirt/web/requirements.txt"
+
+      - name: Prepare model directory
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          ROOT="$HOME/HeroDirt"
+          REPO="$GITHUB_WORKSPACE/HeroDirt/web"
+
+          mkdir -p "$ROOT/src"
+          mkdir -p "$ROOT/static"
+          mkdir -p "$ROOT/data/osm"
+          mkdir -p "$ROOT/output"
+
+          cp "$REPO"/src/*.py "$ROOT/src/"
+          cp -R "$REPO/static/." "$ROOT/static/"
+
+          gzip -dc \
+            "$REPO/data/osm/SanGabriels_all_trails_overpass.json.gz" \
+            > "$ROOT/data/osm/SanGabriels_all_trails_overpass.json"
+
+          # Site builders write into ~/HeroDirt/web
+          mkdir -p "$ROOT/web/data"
+
+      - name: Configure NASA Earthdata
+        env:
+          EARTHDATA_USERNAME: ${{ secrets.EARTHDATA_USERNAME }}
+          EARTHDATA_PASSWORD: ${{ secrets.EARTHDATA_PASSWORD }}
+        shell: bash
+        run: |
+          python - <<'PY'
+          import os
+          from pathlib import Path
+
+          user = os.environ["EARTHDATA_USERNAME"]
+          password = os.environ["EARTHDATA_PASSWORD"]
+
+          if not user or not password:
+              raise RuntimeError("Missing NASA Earthdata credentials")
+
+          path = Path.home() / ".netrc"
+          path.write_text(
+              f"machine urs.earthdata.nasa.gov\n"
+              f"  login {user}\n"
+              f"  password {password}\n"
+          )
+          path.chmod(0o600)
+          PY
+
+      - name: Download MRMS
+        run: python "$HOME/HeroDirt/src/get_mrms.py"
+
+      - name: Download SMAP
+        run: python "$HOME/HeroDirt/src/get_smap.py"
+
+      - name: Download NWS forecast
+        run: python "$HOME/HeroDirt/src/get_nws.py"
+
+      - name: Check forcing
+        run: python "$HOME/HeroDirt/src/check_forcing.py"
+
+      - name: Run soil model
+        run: python "$HOME/HeroDirt/src/run_soil_model_v2.py"
+
+      - name: Generate trail map
+        run: python "$HOME/HeroDirt/src/build_trail_map.py"
+
+      - name: Generate Explorer
+        run: python "$HOME/HeroDirt/src/build_explorer_map.py"
+
+      - name: Validate outputs
+        shell: bash
+        run: |
+          set -euo pipefail
+          ROOT="$HOME/HeroDirt"
+
+          test -s "$ROOT/output/current_v2_beta/HeroDirt_current_state.npz"
+          test -s "$ROOT/output/forecast_v2_beta/HeroDirt_forecast_6hourly.npz"
+          test -s "$ROOT/web/HeroDirt_trails.html"
+          test -s "$ROOT/web/HeroDirt_explorer.html"
+
+          cp "$ROOT/web/HeroDirt_trails.html" "$ROOT/web/index.html"
+
+          test -s "$ROOT/web/data/trails_now.geojson"
+          test -s "$ROOT/web/data/trails_plus120.geojson"
+
+          touch "$ROOT/web/.nojekyll"
+
+      - name: Assemble Pages site
+        shell: bash
+        run: |
+          set -euo pipefail
+          ROOT="$HOME/HeroDirt"
+          SITE="$RUNNER_TEMP/herodirt-site"
+
+          mkdir -p "$SITE/data"
+
+          cp "$ROOT/web/index.html" "$SITE/"
+          cp "$ROOT/web/HeroDirt_trails.html" "$SITE/"
+          cp "$ROOT/web/HeroDirt_explorer.html" "$SITE/explorer.html"
+          cp "$ROOT/web/HeroDirt_explorer.html" "$SITE/HeroDirt_explorer.html"
+          cp "$ROOT/web/data/"*.geojson "$SITE/data/"
+          touch "$SITE/.nojekyll"
+
+          echo "Published files:"
+          du -sh "$SITE"
+          ls -lh "$SITE"
+
+      - name: Configure Pages
+        uses: actions/configure-pages@v5
+
+      - name: Upload Pages artifact
+        uses: actions/upload-pages-artifact@v4
+        with:
+          path: ${{ runner.temp }}/herodirt-site
+
+  deploy:
+    needs: forecast
+    runs-on: ubuntu-latest
+
+    permissions:
+      pages: write
+      id-token: write
+
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+
+    steps:
+      - name: Deploy Pages
+        id: deployment
+        uses: actions/deploy-pages@v4
+
