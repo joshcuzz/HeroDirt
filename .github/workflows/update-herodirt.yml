@@ -123,6 +123,18 @@ jobs:
 
           touch "$ROOT/web/.nojekyll"
 
+
+      - name: Archive model analysis and forecast
+        uses: actions/upload-artifact@v4
+        with:
+          name: herodirt-forecast-${{ github.run_id }}
+          path: |
+            ~/HeroDirt/output/current_v2_beta/HeroDirt_current_state.npz
+            ~/HeroDirt/output/forecast_v2_beta/HeroDirt_forecast_6hourly.npz
+          retention-days: 30
+          compression-level: 1
+          if-no-files-found: error
+
       - name: Assemble Pages site
         shell: bash
         run: |
