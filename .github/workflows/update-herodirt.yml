@@ -7,7 +7,7 @@ on:
     - cron: "17 */3 * * *"
 
 permissions:
-  contents: read
+  contents: write
 
 concurrency:
   group: herodirt-pages
@@ -84,8 +84,80 @@ jobs:
           path.chmod(0o600)
           PY
 
+      - name: Checkout persistent MRMS history
+        uses: actions/checkout@v4
+        with:
+          ref: mrms-history
+          path: mrms-history
+          persist-credentials: true
+
+      - name: Restore MRMS hourly archive
+        shell: bash
+        run: |
+          set -euo pipefail
+          SRC="$GITHUB_WORKSPACE/mrms-history/mrms/HeroDirt_MRMS_hourly.npz"
+          DEST="$HOME/HeroDirt/data/mrms/processed/HeroDirt_MRMS_hourly.npz"
+
+          test -s "$SRC"
+          mkdir -p "$(dirname "$DEST")"
+          cp "$SRC" "$DEST"
+
+          echo "Restored persistent MRMS history:"
+          ls -lh "$DEST"
+
+
+
       - name: Download MRMS
         run: python "$HOME/HeroDirt/src/get_mrms.py"
+
+      - name: Save persistent MRMS history
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          REPO="$GITHUB_WORKSPACE/mrms-history"
+          SOURCE="$HOME/HeroDirt/data/mrms/processed/HeroDirt_MRMS_hourly.npz"
+          DEST="$REPO/mrms/HeroDirt_MRMS_hourly.npz"
+
+          test -s "$SOURCE"
+
+          # Verify the new archive before publishing it.
+          python - "$SOURCE" <<'PY'
+          import sys
+          import numpy as np
+
+          with np.load(sys.argv[1]) as m:
+              t = m["time"].astype("datetime64[s]")
+              p = m["precip_mm"]
+
+              assert len(t) > 0, "Empty MRMS archive"
+              assert p.shape[0] == len(t), "Time/grid mismatch"
+              assert np.all(np.diff(t) > np.timedelta64(0, "s")), "Invalid time ordering"
+              assert np.all(np.isfinite(p)), "Nonfinite precipitation"
+              assert np.all(p >= 0), "Negative precipitation"
+
+              print("MRMS archive validated")
+              print("First:", t[0])
+              print("Last: ", t[-1])
+              print("Hours:", len(t))
+          PY
+
+          cp "$SOURCE" "$DEST"
+
+          git -C "$REPO" config user.name "github-actions[bot]"
+          git -C "$REPO" config user.email \
+            "41898282+github-actions[bot]@users.noreply.github.com"
+
+          git -C "$REPO" add mrms/HeroDirt_MRMS_hourly.npz
+
+          if git -C "$REPO" diff --cached --quiet; then
+            echo "No MRMS changes to save."
+          else
+            git -C "$REPO" commit -m "Update MRMS hourly history"
+            git -C "$REPO" push origin HEAD:mrms-history
+          fi
+
+
 
       - name: Download SMAP
         run: python "$HOME/HeroDirt/src/get_smap.py"
