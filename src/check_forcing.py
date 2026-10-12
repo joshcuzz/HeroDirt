@@ -32,6 +32,87 @@ nws = np.load(NWS_FILE)
 smap = np.load(SMAP_FILE)
 
 
+# ============================================================
+# MRMS CONTINUITY CHECK
+# ============================================================
+
+mt = np.asarray(
+    mrms["time"],
+    dtype="datetime64[s]",
+)
+
+smap_time = np.datetime64(
+    str(smap["observation_time_utc"])
+).astype("datetime64[s]")
+
+forecast_start = np.asarray(
+    nws["forecast_start"]
+).astype("datetime64[s]")
+
+if forecast_start.ndim != 0:
+    raise RuntimeError(
+        "Expected a single NWS forecast start time."
+    )
+
+forecast_start = forecast_start[()]
+
+if forecast_start <= smap_time:
+    raise RuntimeError(
+        "Forecast start must be after SMAP observation."
+    )
+
+# MRMS timestamps represent the end of each hourly
+# precipitation accumulation.
+#
+# Include the hour containing the SMAP observation
+# and all subsequent hours through forecast_start.
+
+expected_start = (
+    smap_time.astype("datetime64[h]")
+    + np.timedelta64(1, "h")
+)
+
+expected_end = forecast_start.astype("datetime64[h]")
+
+expected = np.arange(
+    expected_start,
+    expected_end + np.timedelta64(1, "h"),
+    np.timedelta64(1, "h"),
+).astype("datetime64[s]")
+
+if len(np.unique(mt)) != len(mt):
+    raise RuntimeError(
+        "Duplicate MRMS hourly timestamps detected."
+    )
+
+available = mt[
+    (mt >= expected_start)
+    & (mt <= expected_end)
+]
+
+missing = np.setdiff1d(
+    expected,
+    available,
+)
+
+if len(missing) > 0:
+    print("\nMissing MRMS hourly observations:")
+    for t in missing:
+        print("  ", t)
+
+    raise RuntimeError(
+        f"MRMS analysis incomplete: "
+        f"{len(missing)} missing hourly fields."
+    )
+
+print()
+print("MRMS CONTINUITY CHECK PASSED")
+print(f"SMAP observation: {smap_time}")
+print(f"Forecast start:   {forecast_start}")
+print(f"Required hours:   {len(expected)}")
+print(f"Available hours:  {len(available)}")
+print()
+
 print()
 print("============================================")
 print(" HERO DIRT SOCAL FORCING CHECK")
