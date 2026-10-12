@@ -15,6 +15,8 @@ concurrency:
 
 jobs:
   forecast:
+    outputs:
+      site_ready: ${{ steps.nws_freshness.outputs.ready }}
     runs-on: ubuntu-latest
     timeout-minutes: 120
 
@@ -184,19 +186,56 @@ jobs:
       - name: Download NWS forecast
         run: python "$HOME/HeroDirt/src/get_nws.py"
 
+      - name: Check NWS forecast freshness
+        id: nws_freshness
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - <<'PYCHECK'
+          import os
+          from pathlib import Path
+          import numpy as np
+
+          root = Path.home() / 'HeroDirt'
+          state = root / 'restart/HeroDirt_analysis_restart.npz'
+          nws = root / 'data/nws/processed/HeroDirt_NWS_6hourly.npz'
+          with np.load(nws, allow_pickle=False) as d:
+              start = np.asarray(d['forecast_start']).astype('datetime64[s]')[()]
+              assert not np.isnat(start), 'Invalid NWS start time'
+          if state.exists():
+              with np.load(state, allow_pickle=False) as d:
+                  saved = np.asarray(d['time']).astype('datetime64[s]')[()]
+                  assert not np.isnat(saved), 'Invalid saved analysis time'
+              ready = bool(start > saved)
+              print(f'Saved soil state: {saved}; NWS forecast start: {start}')
+              if not ready:
+                  print('NWS forecast has not advanced. Keeping last good state and published website.')
+          else:
+              ready = True
+              print(f'Cold start; NWS forecast start: {start}')
+
+          with open(os.environ['GITHUB_OUTPUT'], 'a') as f:
+              f.write(f'ready={str(ready).lower()}\n')
+          PYCHECK
+
       - name: Check forcing
+        if: steps.nws_freshness.outputs.ready == 'true'
         run: python "$HOME/HeroDirt/src/check_forcing.py"
 
       - name: Run soil model
+        if: steps.nws_freshness.outputs.ready == 'true'
         run: python "$HOME/HeroDirt/src/run_soil_model_v2.py"
 
       - name: Generate trail map
+        if: steps.nws_freshness.outputs.ready == 'true'
         run: python "$HOME/HeroDirt/src/build_trail_map.py"
 
       - name: Generate Explorer
+        if: steps.nws_freshness.outputs.ready == 'true'
         run: python "$HOME/HeroDirt/src/build_explorer_map.py"
 
       - name: Validate outputs
+        if: steps.nws_freshness.outputs.ready == 'true'
         shell: bash
         run: |
           set -euo pipefail
@@ -216,6 +255,7 @@ jobs:
 
 
       - name: Save persistent analyzed soil state
+        if: steps.nws_freshness.outputs.ready == 'true'
         shell: bash
         run: |
           set -euo pipefail
@@ -256,6 +296,7 @@ jobs:
           git -C "$REPO" push origin HEAD:soil-state
 
       - name: Archive model analysis and forecast
+        if: steps.nws_freshness.outputs.ready == 'true'
         uses: actions/upload-artifact@v4
         with:
           name: herodirt-forecast-${{ github.run_id }}
@@ -267,6 +308,7 @@ jobs:
           if-no-files-found: error
 
       - name: Assemble Pages site
+        if: steps.nws_freshness.outputs.ready == 'true'
         shell: bash
         run: |
           set -euo pipefail
@@ -287,15 +329,18 @@ jobs:
           ls -lh "$SITE"
 
       - name: Configure Pages
+        if: steps.nws_freshness.outputs.ready == 'true'
         uses: actions/configure-pages@v5
 
       - name: Upload Pages artifact
+        if: steps.nws_freshness.outputs.ready == 'true'
         uses: actions/upload-pages-artifact@v4
         with:
           path: ${{ runner.temp }}/herodirt-site
 
   deploy:
     needs: forecast
+    if: needs.forecast.outputs.site_ready == 'true'
     runs-on: ubuntu-latest
 
     permissions:
