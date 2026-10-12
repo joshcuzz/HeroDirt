@@ -1908,6 +1908,44 @@ else:
     )
 
 
+# NWS issuance time and observed analysis time are independent.
+# MRMS timestamps are the ends of hourly precipitation accumulations.
+nws_issuance_start = np.asarray(forecast_start).astype("datetime64[s]")[()]
+if len(mrms_time) == 0:
+    raise RuntimeError("MRMS history is empty")
+if np.any(np.isnat(mrms_time)) or np.any(np.diff(mrms_time) <= np.timedelta64(0, "s")):
+    raise RuntimeError("MRMS hourly timestamps must be strictly increasing")
+if len(nws_time) == 0 or np.any(np.diff(nws_time) <= np.timedelta64(0, "s")):
+    raise RuntimeError("NWS forecast block ends must be strictly increasing")
+
+analysis_end = mrms_time[-1]
+if analysis_end >= nws_time[-1]:
+    raise RuntimeError("NWS forecast expires before the latest MRMS analysis; refusing stale forecast")
+forecast_start = analysis_end  # Downstream analysis and restart output clock.
+
+# NWS 6-hourly precipitation is accumulated over original block windows.
+# Drop elapsed blocks; proportionally retain only the unelapsed portion
+# of a block straddling the observed MRMS analysis cutoff. This uniform
+# within-block assumption is approximate, NOT an hourly NWS forecast.
+full_block_starts = np.concatenate((
+    np.asarray([nws_issuance_start], dtype="datetime64[s]"), nws_time[:-1]
+))
+valid_blocks = nws_time > analysis_end
+block_durations = (nws_time - full_block_starts) / np.timedelta64(1, "s")
+remaining_durations = (nws_time - np.maximum(full_block_starts, analysis_end)) / np.timedelta64(1, "s")
+if np.any(block_durations <= 0):
+    raise RuntimeError("Invalid NWS precipitation accumulation window")
+fractions = np.clip(remaining_durations / block_durations, 0., 1.)
+nws_precip = nws_precip[valid_blocks] * fractions[valid_blocks, None, None]
+nws_time = nws_time[valid_blocks]
+nws_temp = nws_temp[valid_blocks]
+nws_rh = nws_rh[valid_blocks]
+nws_wind = nws_wind[valid_blocks]
+nws_cloud = nws_cloud[valid_blocks]
+print(f"NWS issuance start: {nws_issuance_start}; MRMS analysis end: {analysis_end}")
+print(f"Forecast blocks remaining: {len(nws_time)} (partial first-block QPF if needed)")
+
+
 # ============================================================
 # OPERATIONAL RESTART: previous analysis, never a forecast state.
 # The saved state is authoritative only when its grid and timestamp
@@ -1924,8 +1962,8 @@ if RESTART_FILE.exists():
         if absent:
             raise RuntimeError(f"Incomplete Hero Dirt restart: {absent}")
         saved_time = np.asarray(prior["time"]).astype("datetime64[s]")[()]
-        if not (saved_time < forecast_start):
-            raise RuntimeError(f"Restart time {saved_time} is not before forecast {forecast_start}")
+        if saved_time > forecast_start:
+            raise RuntimeError(f"Restart time {saved_time} is ahead of latest MRMS {forecast_start}")
         if not (np.array_equal(prior["x"], x.astype(np.float32)) and
                 np.array_equal(prior["y"], y.astype(np.float32))):
             raise RuntimeError("Restart grid coordinates do not match model")

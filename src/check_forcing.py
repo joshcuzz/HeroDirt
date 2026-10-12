@@ -66,10 +66,18 @@ if forecast_start.ndim != 0:
 
 forecast_start = forecast_start[()]
 
-if forecast_start <= smap_time:
-    raise RuntimeError(
-        "Forecast start must be after SMAP observation."
-    )
+# No requirement that NWS has reissued since the saved soil analysis.
+# The analysis advances to the latest hourly MRMS observation.
+if not len(mt):
+    raise RuntimeError("No MRMS observations")
+if np.any(np.isnat(mt)) or np.any(np.diff(mt) <= np.timedelta64(0, 's')):
+    raise RuntimeError("MRMS timestamps must be strictly increasing")
+if mt[-1] < smap_time:
+    raise RuntimeError("Saved state is newer than available MRMS observations")
+if np.asarray(nws["time"]).astype("datetime64[s]")[-1] <= mt[-1]:
+    raise RuntimeError("NWS forecast expires before latest MRMS analysis")
+
+analysis_end = mt[-1]
 
 # MRMS timestamps represent the end of each hourly
 # precipitation accumulation.
@@ -82,7 +90,7 @@ expected_start = (
     + np.timedelta64(1, "h")
 )
 
-expected_end = forecast_start.astype("datetime64[h]")
+expected_end = analysis_end.astype("datetime64[h]")
 
 expected = np.arange(
     expected_start,
@@ -117,8 +125,9 @@ if len(missing) > 0:
 
 print()
 print("MRMS CONTINUITY CHECK PASSED")
-print(f"SMAP observation: {smap_time}")
-print(f"Forecast start:   {forecast_start}")
+print(f"Analysis origin:  {smap_time}")
+print(f"MRMS analysis:    {analysis_end}")
+print(f"NWS issue start:  {forecast_start}")
 print(f"Required hours:   {len(expected)}")
 print(f"Available hours:  {len(available)}")
 print()
