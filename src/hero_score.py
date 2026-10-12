@@ -36,7 +36,7 @@ F_DRY_FULL = 0.50
 
 
 # Wet-condition sensitivity begins before field capacity.
-F_WET_START = 0.80
+F_WET_START = 0.85
 
 
 # Wet-deformation penalty strengths.
@@ -568,14 +568,14 @@ def calculate_hero_score(
         &
         (F >= F_WET_START)
         &
-        (F < 1.0)
+        (F < 1.10)
     ] = 5
 
 
     condition[
         public_valid
         &
-        (F >= 1.0)
+        (F >= 1.10)
     ] = 6
 
 
