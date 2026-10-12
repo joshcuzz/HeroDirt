@@ -159,6 +159,25 @@ jobs:
 
 
 
+      - name: Checkout persistent soil state
+        uses: actions/checkout@v4
+        with:
+          ref: soil-state
+          path: soil-state
+          persist-credentials: true
+
+      - name: Restore analyzed soil state
+        shell: bash
+        run: |
+          set -euo pipefail
+          SRC="$GITHUB_WORKSPACE/soil-state/restart/HeroDirt_analysis_restart.npz"
+          DEST="$HOME/HeroDirt/restart/HeroDirt_analysis_restart.npz"
+          test -s "$SRC"
+          mkdir -p "$(dirname "$DEST")"
+          cp "$SRC" "$DEST"
+          echo "Restored analyzed state:"
+          ls -lh "$DEST"
+
       - name: Download SMAP
         run: python "$HOME/HeroDirt/src/get_smap.py"
 
@@ -195,6 +214,46 @@ jobs:
 
           touch "$ROOT/web/.nojekyll"
 
+
+      - name: Save persistent analyzed soil state
+        shell: bash
+        run: |
+          set -euo pipefail
+          REPO="$GITHUB_WORKSPACE/soil-state"
+          SOURCE="$HOME/HeroDirt/restart/HeroDirt_analysis_restart.npz"
+          DEST="$REPO/restart/HeroDirt_analysis_restart.npz"
+          test -s "$SOURCE"
+          test -s "$DEST"
+
+          python - "$SOURCE" "$DEST" <<'PYVALIDATE'
+          import sys
+          import numpy as np
+          with np.load(sys.argv[1], allow_pickle=False) as new, np.load(sys.argv[2], allow_pickle=False) as old:
+              keys = ('time', 'x', 'y', 'tread_theta', 'shallow_theta', 'physical_deep_theta')
+              assert all(k in new and k in old for k in keys), 'Restart missing keys'
+              assert np.array_equal(new['x'], old['x']) and np.array_equal(new['y'], old['y']), 'Restart grid changed'
+              before = np.asarray(old['time']).astype('datetime64[s]')[()]
+              after = np.asarray(new['time']).astype('datetime64[s]')[()]
+              assert after > before, f'Restart must advance: {before} -> {after}'
+              shape = (len(new['y']), len(new['x']))
+              masks = []
+              for k in keys[3:]:
+                  assert new[k].shape == shape, f'Invalid shape for {k}'
+                  mask = np.isfinite(new[k])
+                  assert mask.any(), f'No modeled cells for {k}'
+                  assert np.all(np.isnan(new[k][~mask])), f'Invalid masked cells in {k}'
+                  assert np.all((new[k][mask] >= 0) & (new[k][mask] <= 1)), f'Invalid soil moisture in {k}'
+                  masks.append(mask)
+              assert all(np.array_equal(masks[0], m) for m in masks[1:]), 'Soil moisture masks disagree'
+              print('Validated soil state:', before, '->', after)
+          PYVALIDATE
+
+          cp "$SOURCE" "$DEST"
+          git -C "$REPO" config user.name "github-actions[bot]"
+          git -C "$REPO" config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git -C "$REPO" add restart/HeroDirt_analysis_restart.npz
+          git -C "$REPO" commit -m "Advance analyzed soil state"
+          git -C "$REPO" push origin HEAD:soil-state
 
       - name: Archive model analysis and forecast
         uses: actions/upload-artifact@v4

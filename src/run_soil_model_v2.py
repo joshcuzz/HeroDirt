@@ -1908,6 +1908,53 @@ else:
     )
 
 
+# ============================================================
+# OPERATIONAL RESTART: previous analysis, never a forecast state.
+# The saved state is authoritative only when its grid and timestamp
+# match, and *every* intervening hourly MRMS field is present.
+# Cold starts still use the existing SMAP initialization above.
+# ============================================================
+RESTART_FILE = ROOT / "restart" / "HeroDirt_analysis_restart.npz"
+analysis_origin = "SMAP cold start"
+if RESTART_FILE.exists():
+    with np.load(RESTART_FILE, allow_pickle=False) as prior:
+        required = ("time", "x", "y", "tread_theta", "shallow_theta",
+                    "physical_deep_theta")
+        absent = [key for key in required if key not in prior.files]
+        if absent:
+            raise RuntimeError(f"Incomplete Hero Dirt restart: {absent}")
+        saved_time = np.asarray(prior["time"]).astype("datetime64[s]")[()]
+        if not (saved_time < forecast_start):
+            raise RuntimeError(f"Restart time {saved_time} is not before forecast {forecast_start}")
+        if not (np.array_equal(prior["x"], x.astype(np.float32)) and
+                np.array_equal(prior["y"], y.astype(np.float32))):
+            raise RuntimeError("Restart grid coordinates do not match model")
+        layers = [np.asarray(prior[k], dtype=float).copy()
+                  for k in ("tread_theta", "shallow_theta", "physical_deep_theta")]
+        for arr in layers:
+            if arr.shape != (ny, nx) or not np.all(np.isfinite(arr[physics])):
+                raise RuntimeError("Restart layers have invalid shape or values")
+        tread, shallow, deep = layers
+        smap_time = saved_time  # Existing analysis replay uses this time as origin.
+        analysis_origin = "persisted analyzed state"
+
+# MRMS timestamps are hour-end accumulation timestamps.  For a restart
+# from an analyzed state on the hour, each subsequent hour is required.
+# For SMAP cold start, begin at the next whole-hour end timestamp.
+expected_first = smap_time.astype("datetime64[h]") + np.timedelta64(1, "h")
+expected_last = forecast_start.astype("datetime64[h]")
+expected = np.arange(expected_first, expected_last + np.timedelta64(1, "h"),
+                     np.timedelta64(1, "h")).astype("datetime64[s]")
+available = mrms_time[(mrms_time >= expected_first) &
+                      (mrms_time <= expected_last)]
+missing = np.setdiff1d(expected, available)
+if missing.size:
+    raise RuntimeError(
+        f"Cannot advance {analysis_origin}; missing {missing.size} MRMS hours: "
+        f"{missing[0]} through {missing[-1]}"
+    )
+print(f"ANALYSIS MODE: {analysis_origin}, origin={smap_time}, required hours={len(expected)}")
+
 analysis_indices = np.where(
     (
         mrms_time
@@ -2506,6 +2553,25 @@ np.savez_compressed(
     public_valid=public,
 )
 
+
+# ============================================================
+# Persist validated analyzed state only, after successful analysis.
+# This local file is the input to the next operational cycle.
+# GitHub Actions must restore/save this file on a dedicated state branch.
+# ============================================================
+import os
+RESTART_FILE.parent.mkdir(parents=True, exist_ok=True)
+restart_tmp = RESTART_FILE.with_suffix(".tmp.npz")
+np.savez_compressed(
+    restart_tmp,
+    time=forecast_start,
+    x=x.astype(np.float32), y=y.astype(np.float32),
+    tread_theta=current_tread.astype(np.float32),
+    shallow_theta=current_shallow.astype(np.float32),
+    physical_deep_theta=current_deep.astype(np.float32),
+)
+os.replace(restart_tmp, RESTART_FILE)
+print(f"Saved analyzed restart: {RESTART_FILE} at {forecast_start}")
 
 # ============================================================
 # GEOTIFF WRITER

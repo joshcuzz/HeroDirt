@@ -45,6 +45,16 @@ smap_time = np.datetime64(
     str(smap["observation_time_utc"])
 ).astype("datetime64[s]")
 
+RESTART_FILE = ROOT / "restart" / "HeroDirt_analysis_restart.npz"
+if RESTART_FILE.exists():
+    with np.load(RESTART_FILE, allow_pickle=False) as prior:
+        if "time" not in prior.files:
+            raise RuntimeError("Restart file missing analysis time")
+        smap_time = np.asarray(prior["time"]).astype("datetime64[s]")[()]
+    print(f"Continuity checked since saved state {smap_time}")
+else:
+    print(f"Cold-start continuity checked since SMAP {smap_time}")
+
 forecast_start = np.asarray(
     nws["forecast_start"]
 ).astype("datetime64[s]")
