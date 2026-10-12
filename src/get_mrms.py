@@ -710,25 +710,85 @@ for i, (
         )
 
 
-if not hourly_fields:
+# ============================================================
+# MERGE NEW MRMS FIELDS WITH PERSISTENT HISTORY
+# ============================================================
+
+# Load the previous processed archive before overwriting it.
+# GitHub Actions will restore this file from mrms-history
+# before running the MRMS ingestion script.
+
+all_times = []
+all_fields = []
+
+if OUT_HOURLY.exists():
+
+    print("Loading existing MRMS hourly archive...")
+
+    with np.load(OUT_HOURLY) as previous:
+
+        old_times = previous["time"].astype(
+            "datetime64[s]"
+        )
+
+        old_precip = previous["precip_mm"].astype(
+            np.float32
+        )
+
+        if old_precip.shape[1:] != shape200:
+            raise RuntimeError(
+                "Existing MRMS archive grid shape mismatch."
+            )
+
+        if not (
+            np.array_equal(previous["x"], x)
+            and np.array_equal(previous["y"], y)
+        ):
+            raise RuntimeError(
+                "Existing MRMS archive coordinates mismatch."
+            )
+
+    all_times.append(old_times)
+    all_fields.append(old_precip)
+
+    print(f"Previous archive: {len(old_times)} hours")
+
+
+if hourly_fields:
+
+    new_times = np.asarray(
+        hourly_times,
+        dtype="datetime64[s]"
+    )
+
+    new_precip = np.stack(
+        hourly_fields,
+        axis=0
+    ).astype(np.float32)
+
+    all_times.append(new_times)
+    all_fields.append(new_precip)
+
+    print(f"Newly processed: {len(new_times)} hours")
+
+
+if not all_times:
 
     raise RuntimeError(
-        "No MRMS hourly fields "
-        "were processed successfully."
+        "No MRMS data available from archive or downloads."
     )
 
 
-hourly_times = np.array(
-    hourly_times,
-    dtype="datetime64[s]",
+hourly_times = np.concatenate(all_times)
+
+hourly_precip = np.concatenate(
+    all_fields,
+    axis=0
 )
 
-
-hourly_precip = np.stack(
-    hourly_fields,
-    axis=0,
-).astype(
-    np.float32
+print(
+    f"Combined hourly records before deduplication: "
+    f"{len(hourly_times)}"
 )
 
 
@@ -737,7 +797,8 @@ hourly_precip = np.stack(
 # ============================================================
 
 order = np.argsort(
-    hourly_times
+    hourly_times,
+    kind="stable",
 )
 
 hourly_times = (
@@ -754,10 +815,16 @@ hourly_precip = (
     ]
 )
 
+# Prefer the last record for each timestamp.
+# Newly processed records take precedence over archived data.
 
-unique_times, unique_index = np.unique(
-    hourly_times,
+unique_times, reverse_index = np.unique(
+    hourly_times[::-1],
     return_index=True,
+)
+
+unique_index = (
+    len(hourly_times) - 1 - reverse_index
 )
 
 
@@ -771,6 +838,33 @@ hourly_precip = (
     ]
 )
 
+# ============================================================
+# RETAIN ROLLING 10-DAY MRMS HISTORY
+# ============================================================
+
+history_hours = 240
+
+latest_time = hourly_times[-1]
+
+cutoff = (
+    latest_time
+    -
+    np.timedelta64(history_hours, "h")
+)
+
+keep = hourly_times >= cutoff
+
+hourly_times = hourly_times[keep]
+hourly_precip = hourly_precip[keep]
+
+print(
+    f"Retained MRMS hourly records: {len(hourly_times)}"
+)
+
+print(
+    f"Archive coverage: "
+    f"{hourly_times[0]} to {hourly_times[-1]}"
+)
 
 # ============================================================
 # SAVE HOURLY HISTORY
