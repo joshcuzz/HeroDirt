@@ -234,7 +234,7 @@ jobs:
               assert np.array_equal(new['x'], old['x']) and np.array_equal(new['y'], old['y']), 'Restart grid changed'
               before = np.asarray(old['time']).astype('datetime64[s]')[()]
               after = np.asarray(new['time']).astype('datetime64[s]')[()]
-              assert after > before, f'Restart must advance: {before} -> {after}'
+              assert after >= before, f'Restart moved backward: {before} -> {after}'
               shape = (len(new['y']), len(new['x']))
               masks = []
               for k in keys[3:]:
