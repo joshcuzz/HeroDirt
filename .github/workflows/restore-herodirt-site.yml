@@ -1,0 +1,60 @@
+name: Restore Last Successful Hero Dirt Site
+
+on:
+  workflow_dispatch:
+
+permissions:
+  actions: read
+  contents: read
+  pages: write
+  id-token: write
+
+jobs:
+  restore:
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deploy.outputs.page_url }}
+
+    steps:
+      - name: Find last successful forecast
+        id: previous
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          RUN_ID=$(gh api -X GET \
+            "repos/${GITHUB_REPOSITORY}/actions/workflows/update-herodirt.yml/runs" \
+            -f status=success -f per_page=20 \
+            --jq '.workflow_runs[0].id')
+          test -n "$RUN_ID"
+          test "$RUN_ID" != "null"
+          echo "run_id=$RUN_ID" >> "$GITHUB_OUTPUT"
+          echo "Restoring from successful run $RUN_ID"
+
+      - name: Download successful website
+        uses: actions/download-artifact@v4
+        with:
+          name: github-pages
+          run-id: ${{ steps.previous.outputs.run_id }}
+          github-token: ${{ github.token }}
+          path: previous-site
+
+      - name: Extract and verify website
+        run: |
+          mkdir -p restored-site
+          tar -xf previous-site/artifact.tar -C restored-site
+          test -s restored-site/index.html
+          grep -q 'Analysis: 2026-10-12T' restored-site/index.html
+          echo "Restoring verified October 12 site."
+
+      - name: Configure Pages
+        uses: actions/configure-pages@v5
+
+      - name: Upload site
+        uses: actions/upload-pages-artifact@v4
+        with:
+          path: restored-site
+
+      - name: Deploy website
+        id: deploy
+        uses: actions/deploy-pages@v4
